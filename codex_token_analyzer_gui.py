@@ -4,6 +4,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
+    QComboBox,
     QFormLayout,
     QGridLayout,
     QGroupBox,
@@ -22,27 +23,154 @@ from PySide6.QtWidgets import (
     QHeaderView,
 )
 
-from analyzer_core import load_report
+from analyzer_core import UTC, UTC_PLUS_8, load_report
 
-THREAD_COLUMNS = [
-    ("Title", "title"),
-    ("Last Activity", "last_activity"),
-    ("Input", "input_tokens"),
-    ("Cached", "cached_input_tokens"),
-    ("Output", "output_tokens"),
-    ("Reasoning", "reasoning_output_tokens"),
-    ("Total", "total_tokens"),
-    ("Cache Hit %", "cache_hit_rate"),
+UI_TEXT = {
+    "zh": {
+        "window_title": "Codex Token Analyzer",
+        "language_label": "语言",
+        "language_name": "中文",
+        "window_days_label": "窗口天数",
+        "days_tooltip": "选择要纳入统计的最近天数。",
+        "refresh_button": "刷新",
+        "summary_group": "汇总",
+        "rate_limits_group": "额度",
+        "summary_rows": {
+            "window_start": "窗口开始",
+            "window_end": "窗口结束",
+            "active_thread_count": "活跃线程数",
+            "input_tokens": "输入 token",
+            "cached_input_tokens": "缓存输入 token",
+            "output_tokens": "输出 token",
+            "reasoning_output_tokens": "推理输出 token",
+            "total_tokens": "总 token",
+            "aggregate_cache_hit_rate": "整体缓存命中率",
+        },
+        "rate_rows": {
+            "timestamp": "时间",
+            "plan_type": "套餐",
+            "primary_used_percent": "5 小时已用",
+            "primary_remaining_percent": "5 小时剩余",
+            "secondary_used_percent": "周额度已用",
+            "secondary_remaining_percent": "周额度剩余",
+            "file": "来源文件",
+        },
+        "thread_columns": [
+            "标题",
+            "最近活动",
+            "输入 token",
+            "缓存输入 token",
+            "输出 token",
+            "推理输出 token",
+            "总 token",
+            "缓存命中率",
+        ],
+        "status_ready": "就绪",
+        "status_refreshing": "正在刷新最近 {days} 天的数据...",
+        "status_loaded": "已加载最近 {days} 天的 {count} 个活跃线程。",
+        "refresh_failed": "刷新失败",
+        "no_rate_limits": "未找到额度信息",
+        "no_active_threads": "所选时间窗口内没有活跃线程。",
+        "details": {
+            "title": "标题",
+            "title_source": "标题来源",
+            "thread_id": "线程 ID",
+            "last_activity": "最近活动",
+            "latest_usage_ts": "最近用量时间",
+            "input_tokens": "输入 token",
+            "cached_input_tokens": "缓存输入 token",
+            "output_tokens": "输出 token",
+            "reasoning_output_tokens": "推理输出 token",
+            "total_tokens": "总 token",
+            "cache_hit_rate": "缓存命中率",
+            "file": "会话文件",
+        },
+        "not_found": "(未找到)",
+        "timezone": UTC_PLUS_8,
+    },
+    "en": {
+        "window_title": "Codex Token Analyzer",
+        "language_label": "Language",
+        "language_name": "English",
+        "window_days_label": "Window Days",
+        "days_tooltip": "Choose how many recent days to include in the report.",
+        "refresh_button": "Refresh",
+        "summary_group": "Summary",
+        "rate_limits_group": "Rate Limits",
+        "summary_rows": {
+            "window_start": "Window Start",
+            "window_end": "Window End",
+            "active_thread_count": "Active Threads",
+            "input_tokens": "Input Tokens",
+            "cached_input_tokens": "Cached Input",
+            "output_tokens": "Output Tokens",
+            "reasoning_output_tokens": "Reasoning Output",
+            "total_tokens": "Total Tokens",
+            "aggregate_cache_hit_rate": "Aggregate Cache Hit",
+        },
+        "rate_rows": {
+            "timestamp": "Timestamp",
+            "plan_type": "Plan",
+            "primary_used_percent": "5h Used",
+            "primary_remaining_percent": "5h Remaining",
+            "secondary_used_percent": "Weekly Used",
+            "secondary_remaining_percent": "Weekly Remaining",
+            "file": "Source File",
+        },
+        "thread_columns": [
+            "Title",
+            "Last Activity",
+            "Input",
+            "Cached",
+            "Output",
+            "Reasoning",
+            "Total",
+            "Cache Hit %",
+        ],
+        "status_ready": "Ready",
+        "status_refreshing": "Refreshing report for last {days} day(s)...",
+        "status_loaded": "Loaded {count} active thread(s) for last {days} day(s).",
+        "refresh_failed": "Refresh Failed",
+        "no_rate_limits": "No rate limits found",
+        "no_active_threads": "No active threads found for the selected window.",
+        "details": {
+            "title": "Title",
+            "title_source": "Title Source",
+            "thread_id": "Thread ID",
+            "last_activity": "Last Activity",
+            "latest_usage_ts": "Latest Usage Timestamp",
+            "input_tokens": "Input Tokens",
+            "cached_input_tokens": "Cached Input Tokens",
+            "output_tokens": "Output Tokens",
+            "reasoning_output_tokens": "Reasoning Output Tokens",
+            "total_tokens": "Total Tokens",
+            "cache_hit_rate": "Cache Hit Rate",
+            "file": "Session File",
+        },
+        "not_found": "(not found)",
+        "timezone": UTC,
+    },
+}
+
+THREAD_COLUMN_KEYS = [
+    "title",
+    "last_activity",
+    "input_tokens",
+    "cached_input_tokens",
+    "output_tokens",
+    "reasoning_output_tokens",
+    "total_tokens",
+    "cache_hit_rate",
 ]
 
 
 class AnalyzerWindow(QMainWindow):
-    def __init__(self) -> None:
+    def __init__(self, initial_language: str = "zh") -> None:
         super().__init__()
+        self.language = initial_language
         self.current_report: dict | None = None
         self.current_threads: list[dict] = []
 
-        self.setWindowTitle("Codex Token Analyzer")
         self.resize(1400, 820)
 
         central = QWidget()
@@ -50,12 +178,20 @@ class AnalyzerWindow(QMainWindow):
         root_layout = QVBoxLayout(central)
 
         controls_layout = QHBoxLayout()
-        controls_layout.addWidget(QLabel("Window Days"))
+        self.language_label = QLabel()
+        controls_layout.addWidget(self.language_label)
+
+        self.language_combo = QComboBox()
+        self.language_combo.addItem(UI_TEXT["zh"]["language_name"], "zh")
+        self.language_combo.addItem(UI_TEXT["en"]["language_name"], "en")
+        controls_layout.addWidget(self.language_combo)
+
+        self.days_label = QLabel()
+        controls_layout.addWidget(self.days_label)
 
         self.days_spin = QSpinBox()
         self.days_spin.setRange(1, 365)
         self.days_spin.setValue(7)
-        self.days_spin.setToolTip("Choose how many recent days to include in the report.")
         controls_layout.addWidget(self.days_spin)
 
         self.refresh_button = QPushButton("Refresh")
@@ -67,18 +203,29 @@ class AnalyzerWindow(QMainWindow):
         root_layout.addWidget(self._build_rate_limits_group())
         root_layout.addWidget(self._build_main_splitter(), stretch=1)
 
+        self.language_combo.currentIndexChanged.connect(self.change_language)
         self.refresh_button.clicked.connect(self.refresh_report)
         self.days_spin.valueChanged.connect(self.refresh_report)
         self.thread_table.itemSelectionChanged.connect(self.update_details)
 
-        self.statusBar().showMessage("Ready")
+        self.summary_value_labels: dict[str, QLabel]
+        self.rate_limit_value_labels: dict[str, QLabel]
+        self.summary_caption_labels: dict[str, QLabel]
+        self.rate_limit_caption_labels: dict[str, QLabel]
+
+        language_index = self.language_combo.findData(initial_language)
+        if language_index >= 0:
+            self.language_combo.setCurrentIndex(language_index)
+
+        self.apply_language()
         self.refresh_report()
 
     def _build_summary_group(self) -> QGroupBox:
-        group = QGroupBox("Summary")
+        group = QGroupBox()
         layout = QGridLayout(group)
 
-        self.summary_labels = {
+        self.summary_group = group
+        self.summary_value_labels = {
             "window_start": QLabel("-"),
             "window_end": QLabel("-"),
             "active_thread_count": QLabel("-"),
@@ -89,32 +236,35 @@ class AnalyzerWindow(QMainWindow):
             "total_tokens": QLabel("-"),
             "aggregate_cache_hit_rate": QLabel("-"),
         }
-
-        rows = [
-            ("Window Start", "window_start"),
-            ("Window End", "window_end"),
-            ("Active Threads", "active_thread_count"),
-            ("Input Tokens", "input_tokens"),
-            ("Cached Input", "cached_input_tokens"),
-            ("Output Tokens", "output_tokens"),
-            ("Reasoning Output", "reasoning_output_tokens"),
-            ("Total Tokens", "total_tokens"),
-            ("Aggregate Cache Hit", "aggregate_cache_hit_rate"),
+        self.summary_caption_labels = {}
+        summary_keys = [
+            "window_start",
+            "window_end",
+            "active_thread_count",
+            "input_tokens",
+            "cached_input_tokens",
+            "output_tokens",
+            "reasoning_output_tokens",
+            "total_tokens",
+            "aggregate_cache_hit_rate",
         ]
 
-        for index, (label_text, key) in enumerate(rows):
+        for index, key in enumerate(summary_keys):
             row = index // 3
             col = (index % 3) * 2
-            layout.addWidget(QLabel(label_text), row, col)
-            layout.addWidget(self.summary_labels[key], row, col + 1)
+            caption = QLabel()
+            self.summary_caption_labels[key] = caption
+            layout.addWidget(caption, row, col)
+            layout.addWidget(self.summary_value_labels[key], row, col + 1)
 
         return group
 
     def _build_rate_limits_group(self) -> QGroupBox:
-        group = QGroupBox("Rate Limits")
+        group = QGroupBox()
         layout = QFormLayout(group)
 
-        self.rate_limit_labels = {
+        self.rate_limits_group = group
+        self.rate_limit_value_labels = {
             "timestamp": QLabel("-"),
             "plan_type": QLabel("-"),
             "primary_used_percent": QLabel("-"),
@@ -123,21 +273,26 @@ class AnalyzerWindow(QMainWindow):
             "secondary_remaining_percent": QLabel("-"),
             "file": QLabel("-"),
         }
-
-        layout.addRow("Timestamp", self.rate_limit_labels["timestamp"])
-        layout.addRow("Plan", self.rate_limit_labels["plan_type"])
-        layout.addRow("5h Used", self.rate_limit_labels["primary_used_percent"])
-        layout.addRow("5h Remaining", self.rate_limit_labels["primary_remaining_percent"])
-        layout.addRow("Weekly Used", self.rate_limit_labels["secondary_used_percent"])
-        layout.addRow("Weekly Remaining", self.rate_limit_labels["secondary_remaining_percent"])
-        layout.addRow("Source File", self.rate_limit_labels["file"])
+        self.rate_limit_caption_labels = {}
+        rate_keys = [
+            "timestamp",
+            "plan_type",
+            "primary_used_percent",
+            "primary_remaining_percent",
+            "secondary_used_percent",
+            "secondary_remaining_percent",
+            "file",
+        ]
+        for key in rate_keys:
+            caption = QLabel()
+            self.rate_limit_caption_labels[key] = caption
+            layout.addRow(caption, self.rate_limit_value_labels[key])
         return group
 
     def _build_main_splitter(self) -> QSplitter:
         splitter = QSplitter(Qt.Orientation.Horizontal)
 
-        self.thread_table = QTableWidget(0, len(THREAD_COLUMNS))
-        self.thread_table.setHorizontalHeaderLabels([label for label, _ in THREAD_COLUMNS])
+        self.thread_table = QTableWidget(0, len(THREAD_COLUMN_KEYS))
         self.thread_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.thread_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.thread_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -153,15 +308,48 @@ class AnalyzerWindow(QMainWindow):
         splitter.setSizes([1000, 400])
         return splitter
 
+    def current_text(self) -> dict:
+        return UI_TEXT[self.language]
+
+    def apply_language(self) -> None:
+        text = self.current_text()
+        self.setWindowTitle(text["window_title"])
+        self.language_label.setText(text["language_label"])
+        self.days_label.setText(text["window_days_label"])
+        self.days_spin.setToolTip(text["days_tooltip"])
+        self.refresh_button.setText(text["refresh_button"])
+        self.summary_group.setTitle(text["summary_group"])
+        self.rate_limits_group.setTitle(text["rate_limits_group"])
+
+        for key, caption in self.summary_caption_labels.items():
+            caption.setText(text["summary_rows"][key])
+
+        for key, caption in self.rate_limit_caption_labels.items():
+            caption.setText(text["rate_rows"][key])
+
+        self.thread_table.setHorizontalHeaderLabels(text["thread_columns"])
+        self.statusBar().showMessage(text["status_ready"])
+
+        if self.current_report is not None:
+            self.populate_summary(self.current_report)
+            self.populate_rate_limits(self.current_report.get("rate_limits"))
+            self.populate_threads(self.current_threads)
+
+    def change_language(self) -> None:
+        self.language = self.language_combo.currentData()
+        self.apply_language()
+        self.refresh_report()
+
     def refresh_report(self) -> None:
         days = self.days_spin.value()
-        self.statusBar().showMessage(f"Refreshing report for last {days} day(s)...")
+        text = self.current_text()
+        self.statusBar().showMessage(text["status_refreshing"].format(days=days))
 
         try:
-            report = load_report(days)
+            report = load_report(days, display_timezone=text["timezone"])
         except Exception as exc:
-            QMessageBox.critical(self, "Refresh Failed", str(exc))
-            self.statusBar().showMessage("Refresh failed")
+            QMessageBox.critical(self, text["refresh_failed"], str(exc))
+            self.statusBar().showMessage(text["refresh_failed"])
             return
 
         self.current_report = report
@@ -171,45 +359,50 @@ class AnalyzerWindow(QMainWindow):
         self.populate_threads(self.current_threads)
 
         thread_count = report["active_thread_count"]
-        self.statusBar().showMessage(f"Loaded {thread_count} active thread(s) for last {days} day(s).")
+        self.statusBar().showMessage(text["status_loaded"].format(days=days, count=thread_count))
 
     def populate_summary(self, report: dict) -> None:
+        labels = self.summary_value_labels
         summary = report["summary"]
-        self.summary_labels["window_start"].setText(report["window_start"])
-        self.summary_labels["window_end"].setText(report["window_end"])
-        self.summary_labels["active_thread_count"].setText(str(report["active_thread_count"]))
-        self.summary_labels["input_tokens"].setText(f"{summary['input_tokens']:,}")
-        self.summary_labels["cached_input_tokens"].setText(f"{summary['cached_input_tokens']:,}")
-        self.summary_labels["output_tokens"].setText(f"{summary['output_tokens']:,}")
-        self.summary_labels["reasoning_output_tokens"].setText(f"{summary['reasoning_output_tokens']:,}")
-        self.summary_labels["total_tokens"].setText(f"{summary['total_tokens']:,}")
-        self.summary_labels["aggregate_cache_hit_rate"].setText(f"{summary['aggregate_cache_hit_rate']:.2f}%")
+        labels["window_start"].setText(report["window_start"])
+        labels["window_end"].setText(report["window_end"])
+        labels["active_thread_count"].setText(str(report["active_thread_count"]))
+        labels["input_tokens"].setText(f"{summary['input_tokens']:,}")
+        labels["cached_input_tokens"].setText(f"{summary['cached_input_tokens']:,}")
+        labels["output_tokens"].setText(f"{summary['output_tokens']:,}")
+        labels["reasoning_output_tokens"].setText(f"{summary['reasoning_output_tokens']:,}")
+        labels["total_tokens"].setText(f"{summary['total_tokens']:,}")
+        labels["aggregate_cache_hit_rate"].setText(f"{summary['aggregate_cache_hit_rate']:.2f}%")
 
     def populate_rate_limits(self, rate_limits: dict | None) -> None:
+        text = self.current_text()
         if not rate_limits:
-            for label in self.rate_limit_labels.values():
-                label.setText("No rate limits found")
+            for label in self.rate_limit_value_labels.values():
+                label.setText(text["no_rate_limits"])
             return
 
-        self.rate_limit_labels["timestamp"].setText(rate_limits["timestamp"])
-        self.rate_limit_labels["plan_type"].setText(str(rate_limits["plan_type"]))
-        self.rate_limit_labels["primary_used_percent"].setText(f"{rate_limits['primary_used_percent']:.1f}%")
-        self.rate_limit_labels["primary_remaining_percent"].setText(
+        self.rate_limit_value_labels["timestamp"].setText(rate_limits["timestamp"])
+        self.rate_limit_value_labels["plan_type"].setText(str(rate_limits["plan_type"]))
+        self.rate_limit_value_labels["primary_used_percent"].setText(f"{rate_limits['primary_used_percent']:.1f}%")
+        self.rate_limit_value_labels["primary_remaining_percent"].setText(
             f"{rate_limits['primary_remaining_percent']:.1f}%"
         )
-        self.rate_limit_labels["secondary_used_percent"].setText(f"{rate_limits['secondary_used_percent']:.1f}%")
-        self.rate_limit_labels["secondary_remaining_percent"].setText(
+        self.rate_limit_value_labels["secondary_used_percent"].setText(
+            f"{rate_limits['secondary_used_percent']:.1f}%"
+        )
+        self.rate_limit_value_labels["secondary_remaining_percent"].setText(
             f"{rate_limits['secondary_remaining_percent']:.1f}%"
         )
-        self.rate_limit_labels["file"].setText(rate_limits["file"])
+        self.rate_limit_value_labels["file"].setText(rate_limits["file"])
 
     def populate_threads(self, threads: list[dict]) -> None:
+        text = self.current_text()
         self.thread_table.setSortingEnabled(False)
         self.thread_table.clearContents()
         self.thread_table.setRowCount(len(threads))
 
         for row_index, thread in enumerate(threads):
-            self._set_text_item(row_index, 0, thread["title"] or "(not found)")
+            self._set_text_item(row_index, 0, thread["title"] or text["not_found"])
             self._set_text_item(row_index, 1, thread["last_activity"] or "-")
             self._set_number_item(row_index, 2, thread["input_tokens"])
             self._set_number_item(row_index, 3, thread["cached_input_tokens"])
@@ -224,9 +417,10 @@ class AnalyzerWindow(QMainWindow):
         if threads:
             self.thread_table.selectRow(0)
         else:
-            self.details_text.setPlainText("No active threads found for the selected window.")
+            self.details_text.setPlainText(text["no_active_threads"])
 
     def update_details(self) -> None:
+        text = self.current_text()
         selected_rows = self.thread_table.selectionModel().selectedRows()
         if not selected_rows:
             self.details_text.clear()
@@ -244,18 +438,18 @@ class AnalyzerWindow(QMainWindow):
             return
 
         lines = [
-            f"Title: {thread['title'] or '(not found)'}",
-            f"Title Source: {thread['title_source']}",
-            f"Thread ID: {thread['thread_id'] or '-'}",
-            f"Last Activity: {thread['last_activity'] or '-'}",
-            f"Latest Usage Timestamp: {thread['latest_usage_ts'] or '-'}",
-            f"Input Tokens: {thread['input_tokens']:,}",
-            f"Cached Input Tokens: {thread['cached_input_tokens']:,}",
-            f"Output Tokens: {thread['output_tokens']:,}",
-            f"Reasoning Output Tokens: {thread['reasoning_output_tokens']:,}",
-            f"Total Tokens: {thread['total_tokens']:,}",
-            f"Cache Hit Rate: {thread['cache_hit_rate']:.2f}%",
-            f"Session File: {thread['file']}",
+            f"{text['details']['title']}: {thread['title'] or text['not_found']}",
+            f"{text['details']['title_source']}: {thread['title_source']}",
+            f"{text['details']['thread_id']}: {thread['thread_id'] or '-'}",
+            f"{text['details']['last_activity']}: {thread['last_activity'] or '-'}",
+            f"{text['details']['latest_usage_ts']}: {thread['latest_usage_ts'] or '-'}",
+            f"{text['details']['input_tokens']}: {thread['input_tokens']:,}",
+            f"{text['details']['cached_input_tokens']}: {thread['cached_input_tokens']:,}",
+            f"{text['details']['output_tokens']}: {thread['output_tokens']:,}",
+            f"{text['details']['reasoning_output_tokens']}: {thread['reasoning_output_tokens']:,}",
+            f"{text['details']['total_tokens']}: {thread['total_tokens']:,}",
+            f"{text['details']['cache_hit_rate']}: {thread['cache_hit_rate']:.2f}%",
+            f"{text['details']['file']}: {thread['file']}",
         ]
         self.details_text.setPlainText("\n".join(lines))
 
@@ -276,8 +470,8 @@ class AnalyzerWindow(QMainWindow):
         self.thread_table.setItem(row, col, item)
 
 
-def run() -> int:
+def run(initial_language: str = "zh") -> int:
     app = QApplication.instance() or QApplication([])
-    window = AnalyzerWindow()
+    window = AnalyzerWindow(initial_language=initial_language)
     window.show()
     return app.exec()

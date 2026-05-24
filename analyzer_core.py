@@ -9,6 +9,8 @@ from typing import Any
 SESSIONS_BASE = Path.home() / ".codex" / "sessions"
 SESSION_INDEX = Path.home() / ".codex" / "session_index.jsonl"
 STATE_DB = Path.home() / ".codex" / "state_5.sqlite"
+UTC = timezone.utc
+UTC_PLUS_8 = timezone(timedelta(hours=8))
 
 
 def parse_timestamp(value: str | None) -> datetime | None:
@@ -25,6 +27,30 @@ def parse_timestamp(value: str | None) -> datetime | None:
 
 def iso_z(dt: datetime) -> str:
     return dt.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def timezone_label(display_timezone: timezone) -> str:
+    if display_timezone == UTC:
+        return "UTC"
+    if display_timezone == UTC_PLUS_8:
+        return "UTC+8"
+
+    offset = display_timezone.utcoffset(None) or timedelta()
+    total_minutes = int(offset.total_seconds() // 60)
+    sign = "+" if total_minutes >= 0 else "-"
+    total_minutes = abs(total_minutes)
+    hours, minutes = divmod(total_minutes, 60)
+    if minutes:
+        return f"UTC{sign}{hours:02d}:{minutes:02d}"
+    return f"UTC{sign}{hours}"
+
+
+def format_timestamp(dt: datetime | None, display_timezone: timezone) -> str | None:
+    if dt is None:
+        return None
+
+    local_dt = dt.astimezone(display_timezone).replace(microsecond=0)
+    return f"{local_dt:%Y-%m-%d %H:%M:%S} {timezone_label(display_timezone)}"
 
 
 def _safe_int(value: Any) -> int:
@@ -90,7 +116,7 @@ def read_state_titles() -> dict[str, dict[str, Any]]:
     return titles
 
 
-def load_report(window_days: int = 7) -> dict[str, Any]:
+def load_report(window_days: int = 7, display_timezone: timezone = UTC) -> dict[str, Any]:
     if window_days < 1:
         raise ValueError("window_days must be at least 1")
 
@@ -193,9 +219,9 @@ def load_report(window_days: int = 7) -> dict[str, Any]:
                 "title_source": thread["title_source"],
                 "thread_id": thread["thread_id"],
                 "file": thread["file"],
-                "last_activity": thread["last_activity_text"],
+                "last_activity": format_timestamp(thread["last_activity"], display_timezone),
                 "last_activity_sort": iso_z(thread["last_activity"]),
-                "latest_usage_ts": thread["latest_usage_text"],
+                "latest_usage_ts": format_timestamp(thread["latest_usage_ts"], display_timezone),
                 "input_tokens": input_tokens,
                 "cached_input_tokens": cached_tokens,
                 "output_tokens": usage.get("output_tokens", 0),
@@ -228,7 +254,7 @@ def load_report(window_days: int = 7) -> dict[str, Any]:
 
         rate_limits_report = {
             "file": latest_limits["file"],
-            "timestamp": latest_limits["timestamp_text"],
+            "timestamp": format_timestamp(latest_limits["timestamp"], display_timezone),
             "plan_type": rate_limits.get("plan_type", "unknown"),
             "primary_used_percent": primary_used,
             "primary_remaining_percent": max(0.0, 100.0 - primary_used),
@@ -238,10 +264,11 @@ def load_report(window_days: int = 7) -> dict[str, Any]:
 
     return {
         "window_days": window_days,
-        "window_start": iso_z(window_start),
-        "window_end": iso_z(window_end),
+        "window_start": format_timestamp(window_start, display_timezone),
+        "window_end": format_timestamp(window_end, display_timezone),
         "active_thread_count": len(active_threads),
         "summary": summary,
         "threads": active_threads,
         "rate_limits": rate_limits_report,
+        "timezone_label": timezone_label(display_timezone),
     }
