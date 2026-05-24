@@ -6,6 +6,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+from pricing import estimate_cost, get_default_profile, get_profile_names, load_pricing_config
+
 SESSIONS_BASE = Path.home() / ".codex" / "sessions"
 SESSION_INDEX = Path.home() / ".codex" / "session_index.jsonl"
 STATE_DB = Path.home() / ".codex" / "state_5.sqlite"
@@ -116,12 +118,20 @@ def read_state_titles() -> dict[str, dict[str, Any]]:
     return titles
 
 
-def load_report(window_days: int = 7, display_timezone: timezone = UTC) -> dict[str, Any]:
+def load_report(
+    window_days: int = 7,
+    display_timezone: timezone = UTC,
+    pricing_config_path: str | Path | None = None,
+    pricing_profile: str | None = None,
+    regional_pricing: bool = False,
+) -> dict[str, Any]:
     if window_days < 1:
         raise ValueError("window_days must be at least 1")
 
     window_end = datetime.now(timezone.utc)
     window_start = window_end - timedelta(days=window_days)
+    pricing_config = load_pricing_config(pricing_config_path)
+    pricing_profile = pricing_profile or get_default_profile(pricing_config)
 
     session_index_titles = read_session_index_titles()
     state_titles = read_state_titles()
@@ -139,6 +149,7 @@ def load_report(window_days: int = 7, display_timezone: timezone = UTC) -> dict[
                 "title_source": None,
                 "last_activity": None,
                 "last_activity_text": None,
+                "model": None,
                 "latest_usage": None,
                 "latest_usage_ts": None,
                 "latest_usage_text": None,
@@ -164,6 +175,14 @@ def load_report(window_days: int = 7, display_timezone: timezone = UTC) -> dict[
                     session_id = payload.get("id")
                     if session_id:
                         thread["thread_id"] = session_id
+                    model = payload.get("model")
+                    if model:
+                        thread["model"] = model
+
+                if data.get("type") == "turn_context":
+                    model = payload.get("model")
+                    if model:
+                        thread["model"] = model
 
                 info = payload.get("info") or {}
                 usage = info.get("total_token_usage")
@@ -212,6 +231,15 @@ def load_report(window_days: int = 7, display_timezone: timezone = UTC) -> dict[
         input_tokens = usage.get("input_tokens", 0)
         cached_tokens = usage.get("cached_input_tokens", 0)
         cache_hit_rate = (cached_tokens / input_tokens * 100) if input_tokens else 0.0
+        pricing = estimate_cost(
+            model=thread.get("model"),
+            input_tokens=input_tokens,
+            cached_input_tokens=cached_tokens,
+            output_tokens=usage.get("output_tokens", 0),
+            config=pricing_config,
+            profile_name=pricing_profile,
+            regional=regional_pricing,
+        )
 
         active_threads.append(
             {
@@ -219,6 +247,7 @@ def load_report(window_days: int = 7, display_timezone: timezone = UTC) -> dict[
                 "title_source": thread["title_source"],
                 "thread_id": thread["thread_id"],
                 "file": thread["file"],
+                "model": thread.get("model"),
                 "last_activity": format_timestamp(thread["last_activity"], display_timezone),
                 "last_activity_sort": iso_z(thread["last_activity"]),
                 "latest_usage_ts": format_timestamp(thread["latest_usage_ts"], display_timezone),
@@ -228,6 +257,12 @@ def load_report(window_days: int = 7, display_timezone: timezone = UTC) -> dict[
                 "reasoning_output_tokens": usage.get("reasoning_output_tokens", 0),
                 "total_tokens": usage.get("total_tokens", 0),
                 "cache_hit_rate": cache_hit_rate,
+                "pricing_status": pricing["status"],
+                "pricing_model": pricing.get("resolved_model"),
+                "estimated_cost_usd": pricing.get("estimated_cost_usd"),
+                "pricing_profile": pricing_profile,
+                "regional_pricing": regional_pricing,
+                "regional_uplift_percent": pricing.get("regional_uplift_percent", 0.0),
             }
         )
 
@@ -239,6 +274,9 @@ def load_report(window_days: int = 7, display_timezone: timezone = UTC) -> dict[
         "output_tokens": sum(t["output_tokens"] for t in active_threads),
         "reasoning_output_tokens": sum(t["reasoning_output_tokens"] for t in active_threads),
         "total_tokens": sum(t["total_tokens"] for t in active_threads),
+        "estimated_cost_usd": sum((t["estimated_cost_usd"] or 0.0) for t in active_threads),
+        "priced_thread_count": sum(1 for t in active_threads if t["estimated_cost_usd"] is not None),
+        "unpriced_thread_count": sum(1 for t in active_threads if t["estimated_cost_usd"] is None),
     }
     summary["aggregate_cache_hit_rate"] = (
         summary["cached_input_tokens"] / summary["input_tokens"] * 100 if summary["input_tokens"] else 0.0
@@ -271,4 +309,8 @@ def load_report(window_days: int = 7, display_timezone: timezone = UTC) -> dict[
         "threads": active_threads,
         "rate_limits": rate_limits_report,
         "timezone_label": timezone_label(display_timezone),
+        "pricing_profile": pricing_profile,
+        "pricing_config_path": pricing_config["_resolved_path"],
+        "pricing_profiles": get_profile_names(pricing_config),
+        "regional_pricing": regional_pricing,
     }

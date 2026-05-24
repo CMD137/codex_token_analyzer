@@ -4,6 +4,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
+    QCheckBox,
     QComboBox,
     QFormLayout,
     QGridLayout,
@@ -24,6 +25,7 @@ from PySide6.QtWidgets import (
 )
 
 from analyzer_core import UTC, UTC_PLUS_8, load_report
+from pricing import get_default_profile, load_pricing_config
 
 UI_TEXT = {
     "zh": {
@@ -45,6 +47,9 @@ UI_TEXT = {
             "reasoning_output_tokens": "推理输出 token",
             "total_tokens": "总 token",
             "aggregate_cache_hit_rate": "整体缓存命中率",
+            "estimated_cost_usd": "估算费用",
+            "priced_thread_count": "已定价线程数",
+            "unpriced_thread_count": "未定价线程数",
         },
         "rate_rows": {
             "timestamp": "时间",
@@ -57,6 +62,7 @@ UI_TEXT = {
         },
         "thread_columns": [
             "标题",
+            "模型",
             "最近活动",
             "输入 token",
             "缓存输入 token",
@@ -64,7 +70,10 @@ UI_TEXT = {
             "推理输出 token",
             "总 token",
             "缓存命中率",
+            "估算费用",
         ],
+        "pricing_label": "定价档位",
+        "regional_label": "区域加价",
         "status_ready": "就绪",
         "status_refreshing": "正在刷新最近 {days} 天的数据...",
         "status_loaded": "已加载最近 {days} 天的 {count} 个活跃线程。",
@@ -75,6 +84,7 @@ UI_TEXT = {
             "title": "标题",
             "title_source": "标题来源",
             "thread_id": "线程 ID",
+            "model": "模型",
             "last_activity": "最近活动",
             "latest_usage_ts": "最近用量时间",
             "input_tokens": "输入 token",
@@ -83,9 +93,11 @@ UI_TEXT = {
             "reasoning_output_tokens": "推理输出 token",
             "total_tokens": "总 token",
             "cache_hit_rate": "缓存命中率",
+            "estimated_cost_usd": "估算费用",
             "file": "会话文件",
         },
         "not_found": "(未找到)",
+        "cost_unavailable": "不可估算",
         "timezone": UTC_PLUS_8,
     },
     "en": {
@@ -107,6 +119,9 @@ UI_TEXT = {
             "reasoning_output_tokens": "Reasoning Output",
             "total_tokens": "Total Tokens",
             "aggregate_cache_hit_rate": "Aggregate Cache Hit",
+            "estimated_cost_usd": "Estimated Cost",
+            "priced_thread_count": "Priced Threads",
+            "unpriced_thread_count": "Unpriced Threads",
         },
         "rate_rows": {
             "timestamp": "Timestamp",
@@ -119,6 +134,7 @@ UI_TEXT = {
         },
         "thread_columns": [
             "Title",
+            "Model",
             "Last Activity",
             "Input",
             "Cached",
@@ -126,7 +142,10 @@ UI_TEXT = {
             "Reasoning",
             "Total",
             "Cache Hit %",
+            "Est. Cost",
         ],
+        "pricing_label": "Pricing",
+        "regional_label": "Regional",
         "status_ready": "Ready",
         "status_refreshing": "Refreshing report for last {days} day(s)...",
         "status_loaded": "Loaded {count} active thread(s) for last {days} day(s).",
@@ -137,6 +156,7 @@ UI_TEXT = {
             "title": "Title",
             "title_source": "Title Source",
             "thread_id": "Thread ID",
+            "model": "Model",
             "last_activity": "Last Activity",
             "latest_usage_ts": "Latest Usage Timestamp",
             "input_tokens": "Input Tokens",
@@ -145,15 +165,18 @@ UI_TEXT = {
             "reasoning_output_tokens": "Reasoning Output Tokens",
             "total_tokens": "Total Tokens",
             "cache_hit_rate": "Cache Hit Rate",
+            "estimated_cost_usd": "Estimated Cost",
             "file": "Session File",
         },
         "not_found": "(not found)",
+        "cost_unavailable": "unavailable",
         "timezone": UTC,
     },
 }
 
 THREAD_COLUMN_KEYS = [
     "title",
+    "model",
     "last_activity",
     "input_tokens",
     "cached_input_tokens",
@@ -161,15 +184,24 @@ THREAD_COLUMN_KEYS = [
     "reasoning_output_tokens",
     "total_tokens",
     "cache_hit_rate",
+    "estimated_cost_usd",
 ]
 
 
 class AnalyzerWindow(QMainWindow):
-    def __init__(self, initial_language: str = "zh") -> None:
+    def __init__(
+        self,
+        initial_language: str = "zh",
+        pricing_config_path: str | None = None,
+        initial_pricing_profile: str | None = None,
+        initial_regional_pricing: bool = False,
+    ) -> None:
         super().__init__()
         self.language = initial_language
         self.current_report: dict | None = None
         self.current_threads: list[dict] = []
+        self.pricing_config_path = pricing_config_path
+        self.pricing_config = load_pricing_config(pricing_config_path)
 
         self.resize(1400, 820)
 
@@ -194,7 +226,21 @@ class AnalyzerWindow(QMainWindow):
         self.days_spin.setValue(7)
         controls_layout.addWidget(self.days_spin)
 
-        self.refresh_button = QPushButton("Refresh")
+        self.pricing_label = QLabel()
+        controls_layout.addWidget(self.pricing_label)
+
+        self.pricing_combo = QComboBox()
+        for profile_name in self.pricing_config["profiles"]:
+            self.pricing_combo.addItem(profile_name, profile_name)
+        default_profile = initial_pricing_profile or get_default_profile(self.pricing_config)
+        self.pricing_combo.setCurrentIndex(self.pricing_combo.findData(default_profile))
+        controls_layout.addWidget(self.pricing_combo)
+
+        self.regional_checkbox = QCheckBox()
+        self.regional_checkbox.setChecked(initial_regional_pricing)
+        controls_layout.addWidget(self.regional_checkbox)
+
+        self.refresh_button = QPushButton()
         controls_layout.addWidget(self.refresh_button)
         controls_layout.addStretch()
         root_layout.addLayout(controls_layout)
@@ -204,6 +250,8 @@ class AnalyzerWindow(QMainWindow):
         root_layout.addWidget(self._build_main_splitter(), stretch=1)
 
         self.language_combo.currentIndexChanged.connect(self.change_language)
+        self.pricing_combo.currentIndexChanged.connect(self.refresh_report)
+        self.regional_checkbox.checkStateChanged.connect(self.refresh_report)
         self.refresh_button.clicked.connect(self.refresh_report)
         self.days_spin.valueChanged.connect(self.refresh_report)
         self.thread_table.itemSelectionChanged.connect(self.update_details)
@@ -235,6 +283,9 @@ class AnalyzerWindow(QMainWindow):
             "reasoning_output_tokens": QLabel("-"),
             "total_tokens": QLabel("-"),
             "aggregate_cache_hit_rate": QLabel("-"),
+            "estimated_cost_usd": QLabel("-"),
+            "priced_thread_count": QLabel("-"),
+            "unpriced_thread_count": QLabel("-"),
         }
         self.summary_caption_labels = {}
         summary_keys = [
@@ -247,6 +298,9 @@ class AnalyzerWindow(QMainWindow):
             "reasoning_output_tokens",
             "total_tokens",
             "aggregate_cache_hit_rate",
+            "estimated_cost_usd",
+            "priced_thread_count",
+            "unpriced_thread_count",
         ]
 
         for index, key in enumerate(summary_keys):
@@ -318,6 +372,8 @@ class AnalyzerWindow(QMainWindow):
         self.days_label.setText(text["window_days_label"])
         self.days_spin.setToolTip(text["days_tooltip"])
         self.refresh_button.setText(text["refresh_button"])
+        self.pricing_label.setText(text["pricing_label"])
+        self.regional_checkbox.setText(text["regional_label"])
         self.summary_group.setTitle(text["summary_group"])
         self.rate_limits_group.setTitle(text["rate_limits_group"])
 
@@ -346,7 +402,22 @@ class AnalyzerWindow(QMainWindow):
         self.statusBar().showMessage(text["status_refreshing"].format(days=days))
 
         try:
-            report = load_report(days, display_timezone=text["timezone"])
+            self.pricing_config = load_pricing_config(self.pricing_config_path)
+            current_profile = self.pricing_combo.currentData()
+            self.pricing_combo.blockSignals(True)
+            self.pricing_combo.clear()
+            for profile_name in self.pricing_config["profiles"]:
+                self.pricing_combo.addItem(profile_name, profile_name)
+            selected_profile = current_profile if current_profile in self.pricing_config["profiles"] else get_default_profile(self.pricing_config)
+            self.pricing_combo.setCurrentIndex(self.pricing_combo.findData(selected_profile))
+            self.pricing_combo.blockSignals(False)
+            report = load_report(
+                days,
+                display_timezone=text["timezone"],
+                pricing_config_path=self.pricing_config_path,
+                pricing_profile=self.pricing_combo.currentData(),
+                regional_pricing=self.regional_checkbox.isChecked(),
+            )
         except Exception as exc:
             QMessageBox.critical(self, text["refresh_failed"], str(exc))
             self.statusBar().showMessage(text["refresh_failed"])
@@ -373,6 +444,9 @@ class AnalyzerWindow(QMainWindow):
         labels["reasoning_output_tokens"].setText(f"{summary['reasoning_output_tokens']:,}")
         labels["total_tokens"].setText(f"{summary['total_tokens']:,}")
         labels["aggregate_cache_hit_rate"].setText(f"{summary['aggregate_cache_hit_rate']:.2f}%")
+        labels["estimated_cost_usd"].setText(self.format_cost(summary["estimated_cost_usd"]))
+        labels["priced_thread_count"].setText(str(summary["priced_thread_count"]))
+        labels["unpriced_thread_count"].setText(str(summary["unpriced_thread_count"]))
 
     def populate_rate_limits(self, rate_limits: dict | None) -> None:
         text = self.current_text()
@@ -403,13 +477,15 @@ class AnalyzerWindow(QMainWindow):
 
         for row_index, thread in enumerate(threads):
             self._set_text_item(row_index, 0, thread["title"] or text["not_found"])
-            self._set_text_item(row_index, 1, thread["last_activity"] or "-")
-            self._set_number_item(row_index, 2, thread["input_tokens"])
-            self._set_number_item(row_index, 3, thread["cached_input_tokens"])
-            self._set_number_item(row_index, 4, thread["output_tokens"])
-            self._set_number_item(row_index, 5, thread["reasoning_output_tokens"])
-            self._set_number_item(row_index, 6, thread["total_tokens"])
-            self._set_float_item(row_index, 7, thread["cache_hit_rate"])
+            self._set_text_item(row_index, 1, thread["model"] or text["not_found"])
+            self._set_text_item(row_index, 2, thread["last_activity"] or "-")
+            self._set_number_item(row_index, 3, thread["input_tokens"])
+            self._set_number_item(row_index, 4, thread["cached_input_tokens"])
+            self._set_number_item(row_index, 5, thread["output_tokens"])
+            self._set_number_item(row_index, 6, thread["reasoning_output_tokens"])
+            self._set_number_item(row_index, 7, thread["total_tokens"])
+            self._set_float_item(row_index, 8, thread["cache_hit_rate"])
+            self._set_cost_item(row_index, 9, thread["estimated_cost_usd"], text["cost_unavailable"])
             self.thread_table.item(row_index, 0).setData(Qt.ItemDataRole.UserRole, thread)
 
         self.thread_table.setSortingEnabled(True)
@@ -441,6 +517,7 @@ class AnalyzerWindow(QMainWindow):
             f"{text['details']['title']}: {thread['title'] or text['not_found']}",
             f"{text['details']['title_source']}: {thread['title_source']}",
             f"{text['details']['thread_id']}: {thread['thread_id'] or '-'}",
+            f"{text['details']['model']}: {thread['model'] or text['not_found']}",
             f"{text['details']['last_activity']}: {thread['last_activity'] or '-'}",
             f"{text['details']['latest_usage_ts']}: {thread['latest_usage_ts'] or '-'}",
             f"{text['details']['input_tokens']}: {thread['input_tokens']:,}",
@@ -449,9 +526,15 @@ class AnalyzerWindow(QMainWindow):
             f"{text['details']['reasoning_output_tokens']}: {thread['reasoning_output_tokens']:,}",
             f"{text['details']['total_tokens']}: {thread['total_tokens']:,}",
             f"{text['details']['cache_hit_rate']}: {thread['cache_hit_rate']:.2f}%",
+            f"{text['details']['estimated_cost_usd']}: {self.format_cost(thread['estimated_cost_usd'])}",
             f"{text['details']['file']}: {thread['file']}",
         ]
         self.details_text.setPlainText("\n".join(lines))
+
+    def format_cost(self, value: float | None) -> str:
+        if value is None:
+            return self.current_text()["cost_unavailable"]
+        return f"${value:,.4f}"
 
     def _set_text_item(self, row: int, col: int, text: str) -> None:
         item = QTableWidgetItem(text)
@@ -469,9 +552,24 @@ class AnalyzerWindow(QMainWindow):
         item.setData(Qt.ItemDataRole.EditRole, value)
         self.thread_table.setItem(row, col, item)
 
+    def _set_cost_item(self, row: int, col: int, value: float | None, unavailable_text: str) -> None:
+        item = QTableWidgetItem(unavailable_text if value is None else f"${value:,.4f}")
+        item.setData(Qt.ItemDataRole.EditRole, -1.0 if value is None else value)
+        self.thread_table.setItem(row, col, item)
 
-def run(initial_language: str = "zh") -> int:
+
+def run(
+    initial_language: str = "zh",
+    pricing_config_path: str | None = None,
+    initial_pricing_profile: str | None = None,
+    initial_regional_pricing: bool = False,
+) -> int:
     app = QApplication.instance() or QApplication([])
-    window = AnalyzerWindow(initial_language=initial_language)
+    window = AnalyzerWindow(
+        initial_language=initial_language,
+        pricing_config_path=pricing_config_path,
+        initial_pricing_profile=initial_pricing_profile,
+        initial_regional_pricing=initial_regional_pricing,
+    )
     window.show()
     return app.exec()

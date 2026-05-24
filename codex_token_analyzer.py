@@ -19,11 +19,18 @@ LANGUAGE_CONFIG = {
         "sum_reasoning_output_tokens": "推理输出 token",
         "sum_total_tokens": "总 token",
         "aggregate_cache_hit_rate": "整体缓存命中率",
+        "pricing_profile": "定价档位",
+        "pricing_config_path": "定价配置",
+        "regional_pricing": "区域加价",
+        "estimated_cost_usd": "估算费用",
+        "priced_thread_count": "已定价线程数",
+        "unpriced_thread_count": "未定价线程数",
         "thread": "线程",
         "title": "标题",
         "title_source": "标题来源",
         "thread_id": "线程 ID",
         "file": "文件",
+        "model": "模型",
         "last_activity": "最近活动",
         "latest_usage_ts": "最近用量时间",
         "input_tokens": "输入 token",
@@ -32,6 +39,7 @@ LANGUAGE_CONFIG = {
         "reasoning_output_tokens": "推理输出 token",
         "total_tokens": "总 token",
         "cache_hit_rate": "缓存命中率",
+        "cost_unavailable": "不可估算",
         "rate_limits_header": "额度",
         "latest_limits_file": "最新额度文件",
         "limits_timestamp": "额度时间",
@@ -46,6 +54,8 @@ LANGUAGE_CONFIG = {
         "active_threads_banner": "=== 活跃线程 (最近 {days} 天, {timezone}) ===",
         "rate_limits_banner": "=== 额度 ({timezone}) ===",
         "not_found": "(未找到)",
+        "yes": "是",
+        "no": "否",
     },
     "en": {
         "timezone": UTC,
@@ -60,11 +70,18 @@ LANGUAGE_CONFIG = {
         "sum_reasoning_output_tokens": "sum reasoning output",
         "sum_total_tokens": "sum total tokens",
         "aggregate_cache_hit_rate": "aggregate cache hit",
+        "pricing_profile": "pricing profile",
+        "pricing_config_path": "pricing config",
+        "regional_pricing": "regional uplift",
+        "estimated_cost_usd": "estimated cost",
+        "priced_thread_count": "priced threads",
+        "unpriced_thread_count": "unpriced threads",
         "thread": "Thread",
         "title": "title",
         "title_source": "title source",
         "thread_id": "thread id",
         "file": "file",
+        "model": "model",
         "last_activity": "last activity",
         "latest_usage_ts": "latest usage ts",
         "input_tokens": "input tokens",
@@ -73,6 +90,7 @@ LANGUAGE_CONFIG = {
         "reasoning_output_tokens": "reasoning output",
         "total_tokens": "total tokens",
         "cache_hit_rate": "cache hit rate",
+        "cost_unavailable": "unavailable",
         "rate_limits_header": "RATE LIMITS",
         "latest_limits_file": "latest limits file",
         "limits_timestamp": "limits timestamp",
@@ -87,6 +105,8 @@ LANGUAGE_CONFIG = {
         "active_threads_banner": "=== ACTIVE THREADS (LAST {days} DAYS, {timezone}) ===",
         "rate_limits_banner": "=== RATE LIMITS ({timezone}) ===",
         "not_found": "(not found)",
+        "yes": "yes",
+        "no": "no",
     },
 }
 
@@ -99,9 +119,31 @@ def print_metric(label: str, value: str) -> None:
     print(f"{label:<22} : {value}")
 
 
-def print_report(window_days: int, language: str) -> int:
+def format_cost(cost: float | None, unavailable_text: str) -> str:
+    if cost is None:
+        return unavailable_text
+    return f"${cost:,.4f}"
+
+
+def bool_label(value: bool, config: dict[str, object]) -> str:
+    return str(config["yes"] if value else config["no"])
+
+
+def print_report(
+    window_days: int,
+    language: str,
+    pricing_config_path: str | None = None,
+    pricing_profile: str | None = None,
+    regional_pricing: bool = False,
+) -> int:
     config = get_language_config(language)
-    report = load_report(window_days, display_timezone=config["timezone"])
+    report = load_report(
+        window_days,
+        display_timezone=config["timezone"],
+        pricing_config_path=pricing_config_path,
+        pricing_profile=pricing_profile,
+        regional_pricing=regional_pricing,
+    )
     active_threads = report["threads"]
     rate_limits = report["rate_limits"]
 
@@ -122,6 +164,12 @@ def print_report(window_days: int, language: str) -> int:
     print_metric(str(config["sum_reasoning_output_tokens"]), f"{summary['reasoning_output_tokens']:,}")
     print_metric(str(config["sum_total_tokens"]), f"{summary['total_tokens']:,}")
     print_metric(str(config["aggregate_cache_hit_rate"]), f"{summary['aggregate_cache_hit_rate']:.2f}%")
+    print_metric(str(config["pricing_profile"]), str(report["pricing_profile"]))
+    print_metric(str(config["pricing_config_path"]), str(report["pricing_config_path"]))
+    print_metric(str(config["regional_pricing"]), bool_label(report["regional_pricing"], config))
+    print_metric(str(config["estimated_cost_usd"]), format_cost(summary["estimated_cost_usd"], str(config["cost_unavailable"])))
+    print_metric(str(config["priced_thread_count"]), str(summary["priced_thread_count"]))
+    print_metric(str(config["unpriced_thread_count"]), str(summary["unpriced_thread_count"]))
 
     for index, thread in enumerate(active_threads, start=1):
         print(f"\n--- {config['thread']} {index} ---")
@@ -130,6 +178,7 @@ def print_report(window_days: int, language: str) -> int:
         if thread["thread_id"]:
             print_metric(str(config["thread_id"]), thread["thread_id"])
         print_metric(str(config["file"]), thread["file"])
+        print_metric(str(config["model"]), thread["model"] or str(config["not_found"]))
         print_metric(str(config["last_activity"]), thread["last_activity"])
         print_metric(str(config["latest_usage_ts"]), thread["latest_usage_ts"])
         print_metric(str(config["input_tokens"]), f"{thread['input_tokens']:,}")
@@ -138,6 +187,7 @@ def print_report(window_days: int, language: str) -> int:
         print_metric(str(config["reasoning_output_tokens"]), f"{thread['reasoning_output_tokens']:,}")
         print_metric(str(config["total_tokens"]), f"{thread['total_tokens']:,}")
         print_metric(str(config["cache_hit_rate"]), f"{thread['cache_hit_rate']:.2f}%")
+        print_metric(str(config["estimated_cost_usd"]), format_cost(thread["estimated_cost_usd"], str(config["cost_unavailable"])))
 
     print(f"\n{config['rate_limits_banner'].format(timezone=report['timezone_label'])}\n")
     if rate_limits:
@@ -155,7 +205,12 @@ def print_report(window_days: int, language: str) -> int:
     return 0
 
 
-def launch_gui(language: str) -> int:
+def launch_gui(
+    language: str,
+    pricing_config_path: str | None = None,
+    pricing_profile: str | None = None,
+    regional_pricing: bool = False,
+) -> int:
     config = get_language_config(language)
     try:
         from codex_token_analyzer_gui import run
@@ -166,13 +221,21 @@ def launch_gui(language: str) -> int:
             return 1
         raise
 
-    return run(initial_language=language)
+    return run(
+        initial_language=language,
+        pricing_config_path=pricing_config_path,
+        initial_pricing_profile=pricing_profile,
+        initial_regional_pricing=regional_pricing,
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Analyze Codex token usage from local session files.")
     parser.add_argument("--days", type=int, default=7, help="Recent window size in days. Default: 7")
     parser.add_argument("--lang", choices=("zh", "en"), default="zh", help="Display language. zh uses UTC+8, en uses UTC.")
+    parser.add_argument("--pricing-config", help="Path to pricing config JSON. Default: pricing_config.json")
+    parser.add_argument("--pricing-profile", help="Pricing profile name from the config. Default: config default_profile")
+    parser.add_argument("--regional", action="store_true", help="Apply regional pricing uplift when configured for the model.")
     parser.add_argument("--gui", action="store_true", help="Launch the desktop GUI.")
     return parser
 
@@ -185,9 +248,20 @@ def main() -> int:
         parser.error("--days must be at least 1")
 
     if args.gui:
-        return launch_gui(args.lang)
+        return launch_gui(
+            args.lang,
+            pricing_config_path=args.pricing_config,
+            pricing_profile=args.pricing_profile,
+            regional_pricing=args.regional,
+        )
 
-    return print_report(args.days, args.lang)
+    return print_report(
+        args.days,
+        args.lang,
+        pricing_config_path=args.pricing_config,
+        pricing_profile=args.pricing_profile,
+        regional_pricing=args.regional,
+    )
 
 
 if __name__ == "__main__":
