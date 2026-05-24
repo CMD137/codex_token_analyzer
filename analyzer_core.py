@@ -1,0 +1,247 @@
+from __future__ import annotations
+
+import json
+import sqlite3
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from typing import Any
+
+SESSIONS_BASE = Path.home() / ".codex" / "sessions"
+SESSION_INDEX = Path.home() / ".codex" / "session_index.jsonl"
+STATE_DB = Path.home() / ".codex" / "state_5.sqlite"
+
+
+def parse_timestamp(value: str | None) -> datetime | None:
+    if not value:
+        return None
+
+    try:
+        if value.endswith("Z"):
+            value = value[:-1] + "+00:00"
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return None
+
+
+def iso_z(dt: datetime) -> str:
+    return dt.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _safe_int(value: Any) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _safe_float(value: Any) -> float:
+    try:
+        return float(value or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def read_session_index_titles() -> dict[str, dict[str, Any]]:
+    titles: dict[str, dict[str, Any]] = {}
+
+    if not SESSION_INDEX.exists():
+        return titles
+
+    with open(SESSION_INDEX, encoding="utf-8", errors="ignore") as file_obj:
+        for line in file_obj:
+            try:
+                data = json.loads(line)
+            except Exception:
+                continue
+
+            thread_id = data.get("id")
+            thread_name = (data.get("thread_name") or "").strip()
+            updated_at = data.get("updated_at")
+
+            if thread_id and thread_name:
+                titles[thread_id] = {
+                    "title": thread_name,
+                    "updated_at": updated_at,
+                }
+
+    return titles
+
+
+def read_state_titles() -> dict[str, dict[str, Any]]:
+    titles: dict[str, dict[str, Any]] = {}
+
+    if not STATE_DB.exists():
+        return titles
+
+    conn = sqlite3.connect(STATE_DB)
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT id, title, updated_at_ms FROM threads")
+        for thread_id, title, updated_at_ms in cur.fetchall():
+            title = (title or "").strip()
+            if thread_id and title:
+                titles[thread_id] = {
+                    "title": title,
+                    "updated_at_ms": updated_at_ms,
+                }
+    finally:
+        conn.close()
+
+    return titles
+
+
+def load_report(window_days: int = 7) -> dict[str, Any]:
+    if window_days < 1:
+        raise ValueError("window_days must be at least 1")
+
+    window_end = datetime.now(timezone.utc)
+    window_start = window_end - timedelta(days=window_days)
+
+    session_index_titles = read_session_index_titles()
+    state_titles = read_state_titles()
+    threads: dict[str, dict[str, Any]] = {}
+    latest_limits: dict[str, Any] | None = None
+
+    for file_path in SESSIONS_BASE.glob("**/*.jsonl"):
+        file_key = str(file_path)
+        thread = threads.setdefault(
+            file_key,
+            {
+                "file": file_key,
+                "thread_id": None,
+                "title": None,
+                "title_source": None,
+                "last_activity": None,
+                "last_activity_text": None,
+                "latest_usage": None,
+                "latest_usage_ts": None,
+                "latest_usage_text": None,
+            },
+        )
+
+        with open(file_path, encoding="utf-8", errors="ignore") as file_obj:
+            for line in file_obj:
+                try:
+                    data = json.loads(line)
+                except Exception:
+                    continue
+
+                payload = data.get("payload") or {}
+                ts_text = data.get("timestamp", "")
+                ts = parse_timestamp(ts_text)
+
+                if ts and (thread["last_activity"] is None or ts > thread["last_activity"]):
+                    thread["last_activity"] = ts
+                    thread["last_activity_text"] = ts_text
+
+                if data.get("type") == "session_meta":
+                    session_id = payload.get("id")
+                    if session_id:
+                        thread["thread_id"] = session_id
+
+                info = payload.get("info") or {}
+                usage = info.get("total_token_usage")
+                if usage and ts and (thread["latest_usage_ts"] is None or ts > thread["latest_usage_ts"]):
+                    thread["latest_usage"] = {
+                        "input_tokens": _safe_int(usage.get("input_tokens")),
+                        "cached_input_tokens": _safe_int(usage.get("cached_input_tokens")),
+                        "output_tokens": _safe_int(usage.get("output_tokens")),
+                        "reasoning_output_tokens": _safe_int(usage.get("reasoning_output_tokens")),
+                        "total_tokens": _safe_int(usage.get("total_tokens")),
+                    }
+                    thread["latest_usage_ts"] = ts
+                    thread["latest_usage_text"] = ts_text
+
+                rate_limits = payload.get("rate_limits") or {}
+                if rate_limits and ts:
+                    if latest_limits is None or ts > latest_limits["timestamp"]:
+                        latest_limits = {
+                            "timestamp": ts,
+                            "timestamp_text": ts_text,
+                            "file": file_key,
+                            "rate_limits": rate_limits,
+                        }
+
+    for thread in threads.values():
+        thread_id = thread.get("thread_id")
+        if thread_id and thread_id in session_index_titles:
+            thread["title"] = session_index_titles[thread_id]["title"]
+            thread["title_source"] = "session_index.jsonl"
+        elif thread_id and thread_id in state_titles:
+            thread["title"] = state_titles[thread_id]["title"]
+            thread["title_source"] = "state_5.sqlite"
+        else:
+            thread["title_source"] = "not_found"
+
+    active_threads: list[dict[str, Any]] = []
+    for thread in threads.values():
+        if thread["last_activity"] is None:
+            continue
+        if thread["last_activity"] < window_start:
+            continue
+        if not thread["latest_usage"]:
+            continue
+
+        usage = thread["latest_usage"]
+        input_tokens = usage.get("input_tokens", 0)
+        cached_tokens = usage.get("cached_input_tokens", 0)
+        cache_hit_rate = (cached_tokens / input_tokens * 100) if input_tokens else 0.0
+
+        active_threads.append(
+            {
+                "title": thread["title"],
+                "title_source": thread["title_source"],
+                "thread_id": thread["thread_id"],
+                "file": thread["file"],
+                "last_activity": thread["last_activity_text"],
+                "last_activity_sort": iso_z(thread["last_activity"]),
+                "latest_usage_ts": thread["latest_usage_text"],
+                "input_tokens": input_tokens,
+                "cached_input_tokens": cached_tokens,
+                "output_tokens": usage.get("output_tokens", 0),
+                "reasoning_output_tokens": usage.get("reasoning_output_tokens", 0),
+                "total_tokens": usage.get("total_tokens", 0),
+                "cache_hit_rate": cache_hit_rate,
+            }
+        )
+
+    active_threads.sort(key=lambda item: item["last_activity_sort"], reverse=True)
+
+    summary = {
+        "input_tokens": sum(t["input_tokens"] for t in active_threads),
+        "cached_input_tokens": sum(t["cached_input_tokens"] for t in active_threads),
+        "output_tokens": sum(t["output_tokens"] for t in active_threads),
+        "reasoning_output_tokens": sum(t["reasoning_output_tokens"] for t in active_threads),
+        "total_tokens": sum(t["total_tokens"] for t in active_threads),
+    }
+    summary["aggregate_cache_hit_rate"] = (
+        summary["cached_input_tokens"] / summary["input_tokens"] * 100 if summary["input_tokens"] else 0.0
+    )
+
+    rate_limits_report = None
+    if latest_limits:
+        rate_limits = latest_limits["rate_limits"]
+        primary = rate_limits.get("primary") or {}
+        secondary = rate_limits.get("secondary") or {}
+        primary_used = _safe_float(primary.get("used_percent"))
+        secondary_used = _safe_float(secondary.get("used_percent"))
+
+        rate_limits_report = {
+            "file": latest_limits["file"],
+            "timestamp": latest_limits["timestamp_text"],
+            "plan_type": rate_limits.get("plan_type", "unknown"),
+            "primary_used_percent": primary_used,
+            "primary_remaining_percent": max(0.0, 100.0 - primary_used),
+            "secondary_used_percent": secondary_used,
+            "secondary_remaining_percent": max(0.0, 100.0 - secondary_used),
+        }
+
+    return {
+        "window_days": window_days,
+        "window_start": iso_z(window_start),
+        "window_end": iso_z(window_end),
+        "active_thread_count": len(active_threads),
+        "summary": summary,
+        "threads": active_threads,
+        "rate_limits": rate_limits_report,
+    }
