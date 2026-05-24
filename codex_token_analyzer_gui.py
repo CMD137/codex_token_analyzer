@@ -4,7 +4,6 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
-    QCheckBox,
     QComboBox,
     QFormLayout,
     QGridLayout,
@@ -73,7 +72,6 @@ UI_TEXT = {
             "估算费用",
         ],
         "pricing_label": "定价档位",
-        "regional_label": "区域加价",
         "status_ready": "就绪",
         "status_refreshing": "正在刷新最近 {days} 天的数据...",
         "status_loaded": "已加载最近 {days} 天的 {count} 个活跃线程。",
@@ -145,7 +143,6 @@ UI_TEXT = {
             "Est. Cost",
         ],
         "pricing_label": "Pricing",
-        "regional_label": "Regional",
         "status_ready": "Ready",
         "status_refreshing": "Refreshing report for last {days} day(s)...",
         "status_loaded": "Loaded {count} active thread(s) for last {days} day(s).",
@@ -186,6 +183,17 @@ THREAD_COLUMN_KEYS = [
     "cache_hit_rate",
     "estimated_cost_usd",
 ]
+
+
+class CostTableWidgetItem(QTableWidgetItem):
+    def __init__(self, display_text: str, sort_value: float) -> None:
+        super().__init__(display_text)
+        self.sort_value = sort_value
+
+    def __lt__(self, other: object) -> bool:
+        if isinstance(other, CostTableWidgetItem):
+            return self.sort_value < other.sort_value
+        return super().__lt__(other)
 
 
 class AnalyzerWindow(QMainWindow):
@@ -235,23 +243,21 @@ class AnalyzerWindow(QMainWindow):
         default_profile = initial_pricing_profile or get_default_profile(self.pricing_config)
         self.pricing_combo.setCurrentIndex(self.pricing_combo.findData(default_profile))
         controls_layout.addWidget(self.pricing_combo)
-
-        self.regional_checkbox = QCheckBox()
-        self.regional_checkbox.setChecked(initial_regional_pricing)
-        controls_layout.addWidget(self.regional_checkbox)
+        self.initial_regional_pricing = initial_regional_pricing
 
         self.refresh_button = QPushButton()
         controls_layout.addWidget(self.refresh_button)
         controls_layout.addStretch()
         root_layout.addLayout(controls_layout)
 
-        root_layout.addWidget(self._build_summary_group())
-        root_layout.addWidget(self._build_rate_limits_group())
+        top_panels_layout = QHBoxLayout()
+        top_panels_layout.addWidget(self._build_summary_group(), 3)
+        top_panels_layout.addWidget(self._build_rate_limits_group(), 2)
+        root_layout.addLayout(top_panels_layout)
         root_layout.addWidget(self._build_main_splitter(), stretch=1)
 
         self.language_combo.currentIndexChanged.connect(self.change_language)
         self.pricing_combo.currentIndexChanged.connect(self.refresh_report)
-        self.regional_checkbox.checkStateChanged.connect(self.refresh_report)
         self.refresh_button.clicked.connect(self.refresh_report)
         self.days_spin.valueChanged.connect(self.refresh_report)
         self.thread_table.itemSelectionChanged.connect(self.update_details)
@@ -335,7 +341,6 @@ class AnalyzerWindow(QMainWindow):
             "primary_remaining_percent",
             "secondary_used_percent",
             "secondary_remaining_percent",
-            "file",
         ]
         for key in rate_keys:
             caption = QLabel()
@@ -353,7 +358,10 @@ class AnalyzerWindow(QMainWindow):
         self.thread_table.setAlternatingRowColors(True)
         self.thread_table.setSortingEnabled(True)
         self.thread_table.horizontalHeader().setStretchLastSection(True)
-        self.thread_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        self.thread_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Interactive)
+        self.thread_table.horizontalHeader().setSortIndicator(2, Qt.SortOrder.DescendingOrder)
+        self.thread_table.setColumnWidth(0, 160)
+        self.thread_table.setColumnWidth(1, 57)
         splitter.addWidget(self.thread_table)
 
         self.details_text = QPlainTextEdit()
@@ -373,7 +381,6 @@ class AnalyzerWindow(QMainWindow):
         self.days_spin.setToolTip(text["days_tooltip"])
         self.refresh_button.setText(text["refresh_button"])
         self.pricing_label.setText(text["pricing_label"])
-        self.regional_checkbox.setText(text["regional_label"])
         self.summary_group.setTitle(text["summary_group"])
         self.rate_limits_group.setTitle(text["rate_limits_group"])
 
@@ -416,7 +423,7 @@ class AnalyzerWindow(QMainWindow):
                 display_timezone=text["timezone"],
                 pricing_config_path=self.pricing_config_path,
                 pricing_profile=self.pricing_combo.currentData(),
-                regional_pricing=self.regional_checkbox.isChecked(),
+                regional_pricing=self.initial_regional_pricing,
             )
         except Exception as exc:
             QMessageBox.critical(self, text["refresh_failed"], str(exc))
@@ -489,6 +496,7 @@ class AnalyzerWindow(QMainWindow):
             self.thread_table.item(row_index, 0).setData(Qt.ItemDataRole.UserRole, thread)
 
         self.thread_table.setSortingEnabled(True)
+        self.thread_table.sortItems(2, Qt.SortOrder.DescendingOrder)
 
         if threads:
             self.thread_table.selectRow(0)
@@ -553,8 +561,10 @@ class AnalyzerWindow(QMainWindow):
         self.thread_table.setItem(row, col, item)
 
     def _set_cost_item(self, row: int, col: int, value: float | None, unavailable_text: str) -> None:
-        item = QTableWidgetItem(unavailable_text if value is None else f"${value:,.4f}")
-        item.setData(Qt.ItemDataRole.EditRole, -1.0 if value is None else value)
+        if value is None:
+            item = CostTableWidgetItem(unavailable_text, -1.0)
+        else:
+            item = CostTableWidgetItem(f"${value:,.4f}", value)
         self.thread_table.setItem(row, col, item)
 
 
