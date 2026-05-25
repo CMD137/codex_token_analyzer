@@ -255,7 +255,9 @@ def main() -> int:
     if args.days < 1:
         parser.error("--days must be at least 1")
 
-    if args.gui:
+    # When running as a bundled PyInstaller EXE with no explicit args,
+    # default to launching the GUI (same as running with --gui).
+    if args.gui or (getattr(sys, "frozen", False) and len(sys.argv) <= 1):
         return launch_gui(
             args.lang,
             pricing_config_path=args.pricing_config,

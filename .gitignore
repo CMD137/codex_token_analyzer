@@ -1,2 +1,13 @@
 __pycache__/
 *.pyc
+
+# PyInstaller artifacts
+build/
+dist/
+*.exe
+
+# Reserved Windows device name
+nul
+
+# IDE / tools
+.claude/

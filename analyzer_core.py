@@ -130,7 +130,7 @@ def read_rate_limits_from_logs() -> dict[str, Any] | None:
     if not LOGS_DB.exists():
         return None
 
-    conn = sqlite3.connect(f"file:{LOGS_DB}?immutable=1", uri=True)
+    conn = sqlite3.connect(f"file:///{LOGS_DB.as_posix()}?immutable=1", uri=True)
     try:
         cur = conn.cursor()
         cur.execute(
@@ -288,11 +288,14 @@ def load_report(
                             "secondary_reset_at": _safe_float(secondary.get("resets_at")),
                         }
 
-    # Prefer WebSocket-pushed rate limits from logs_2.sqlite (always more
-    # recent and includes reset timestamps).  Fall back to session-JSONL data.
+    # Merge rate limits from both sources, preferring whichever has the most
+    # recent timestamp.  logs_2.sqlite carries richer data (reset_at etc.),
+    # but session-JSONL may hold the freshest usage percentages from the
+    # latest turn because WebSocket pushes can lag.
     logs_limits = read_rate_limits_from_logs()
     if logs_limits:
-        latest_limits = logs_limits
+        if latest_limits is None or logs_limits["timestamp"] > latest_limits["timestamp"]:
+            latest_limits = logs_limits
 
     for thread in threads.values():
         thread_id = thread.get("thread_id")
