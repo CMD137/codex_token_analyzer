@@ -211,6 +211,10 @@ def load_report(
                 "latest_usage": None,
                 "latest_usage_ts": None,
                 "latest_usage_text": None,
+                "turn_count": 0,
+                "user_message_count": 0,
+                "assistant_message_count": 0,
+                "tool_call_count": 0,
             },
         )
 
@@ -238,9 +242,21 @@ def load_report(
                         thread["model"] = model
 
                 if data.get("type") == "turn_context":
+                    thread["turn_count"] += 1
                     model = payload.get("model")
                     if model:
                         thread["model"] = model
+
+                if data.get("type") == "response_item":
+                    payload_type = payload.get("type")
+                    if payload_type == "message":
+                        role = payload.get("role")
+                        if role == "user":
+                            thread["user_message_count"] += 1
+                        elif role == "assistant":
+                            thread["assistant_message_count"] += 1
+                    elif payload_type in {"function_call", "custom_tool_call"}:
+                        thread["tool_call_count"] += 1
 
                 info = payload.get("info") or {}
                 usage = info.get("total_token_usage")
@@ -314,6 +330,14 @@ def load_report(
 
         active_threads.append(
             {
+                "message_round_count": thread["turn_count"],
+                "user_message_count": thread["user_message_count"],
+                "assistant_message_count": thread["assistant_message_count"],
+                "tool_call_count": thread["tool_call_count"],
+                "avg_tokens_per_round": (usage.get("total_tokens", 0) / thread["turn_count"]) if thread["turn_count"] else 0.0,
+                "output_ratio": (usage.get("output_tokens", 0) / usage.get("total_tokens", 0) * 100)
+                if usage.get("total_tokens", 0)
+                else 0.0,
                 "title": thread["title"],
                 "title_source": thread["title_source"],
                 "thread_id": thread["thread_id"],

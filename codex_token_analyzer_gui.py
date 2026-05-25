@@ -6,6 +6,7 @@ from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
     QFrame,
+    QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -14,6 +15,7 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QProgressBar,
     QPushButton,
+    QScrollArea,
     QSpinBox,
     QSplitter,
     QStyledItemDelegate,
@@ -89,6 +91,10 @@ UI_TEXT = {
             "model": "模型",
             "last_activity": "最近活动",
             "latest_usage_ts": "最近用量时间",
+            "message_round_count": "消息轮数",
+            "avg_tokens_per_round": "平均每轮 token",
+            "tool_call_count": "Tool Calls",
+            "output_ratio": "Output Ratio",
             "input_tokens": "输入 token",
             "cached_input_tokens": "缓存输入 token",
             "output_tokens": "输出 token",
@@ -162,6 +168,10 @@ UI_TEXT = {
             "model": "Model",
             "last_activity": "Last Activity",
             "latest_usage_ts": "Latest Usage Timestamp",
+            "message_round_count": "Message Rounds",
+            "avg_tokens_per_round": "Avg Tokens / Round",
+            "tool_call_count": "Tool Calls",
+            "output_ratio": "Output Ratio",
             "input_tokens": "Input Tokens",
             "cached_input_tokens": "Cached Input Tokens",
             "output_tokens": "Output Tokens",
@@ -188,6 +198,27 @@ THREAD_COLUMN_KEYS = [
     "total_tokens",
     "cache_hit_rate",
     "estimated_cost_usd",
+]
+
+DETAIL_FIELD_KEYS = [
+    "title",
+    "thread_id",
+    "last_activity",
+    "message_round_count",
+    "avg_tokens_per_round",
+    "tool_call_count",
+    "output_ratio",
+    "model",
+    "latest_usage_ts",
+    "input_tokens",
+    "cached_input_tokens",
+    "output_tokens",
+    "reasoning_output_tokens",
+    "total_tokens",
+    "cache_hit_rate",
+    "estimated_cost_usd",
+    "title_source",
+    "file",
 ]
 
 COLOR_BG = "#0F1115"
@@ -455,6 +486,34 @@ class AnalyzerWindow(QMainWindow):
                 border-radius: 12px;
                 padding: 12px;
                 selection-background-color: {COLOR_PRIMARY_SELECTED_BG};
+            }}
+            QFrame#detailsPanel {{
+                background: {COLOR_PANEL};
+                border: 1px solid {COLOR_BORDER};
+                border-radius: 12px;
+            }}
+            QLabel[role="detailTitle"] {{
+                color: {COLOR_TEXT_SECONDARY};
+                font-size: 12px;
+                font-weight: 600;
+                letter-spacing: 0.3px;
+            }}
+            QLabel[role="detailKey"] {{
+                color: {COLOR_TEXT_SECONDARY};
+                font-size: 12px;
+            }}
+            QLabel[role="detailValue"] {{
+                color: {COLOR_TEXT_PRIMARY};
+                font-size: 13px;
+                font-weight: 500;
+            }}
+            QLabel[role="detailEmpty"] {{
+                color: {COLOR_TEXT_MUTED};
+                font-size: 13px;
+            }}
+            QScrollArea#detailsScroll {{
+                border: none;
+                background: transparent;
             }}
             QScrollBar:vertical {{
                 background: transparent;
@@ -775,7 +834,7 @@ class AnalyzerWindow(QMainWindow):
 
         labels["estimated_cost_usd"].setText(self.format_cost_compact(summary["estimated_cost_usd"]))
         labels["estimated_cost_usd"].setToolTip(self.format_cost(summary["estimated_cost_usd"]))
-        self.kpi_subtitles["estimated_cost_usd"].setText(report["pricing_profile"])
+        self.kpi_subtitles["estimated_cost_usd"].setText("参考：developers.openai.com/api/docs/pricing")
 
         labels["total_tokens"].setText(format_short_number(total_tokens))
         labels["total_tokens"].setToolTip(f"{total_tokens:,}")
@@ -1032,7 +1091,7 @@ class AnalyzerWindow(QMainWindow):
 
         labels["estimated_cost_usd"].setText(self.format_cost_compact(summary["estimated_cost_usd"]))
         labels["estimated_cost_usd"].setToolTip(self.format_cost(summary["estimated_cost_usd"]))
-        self.kpi_subtitles["estimated_cost_usd"].setText(report["pricing_profile"])
+        self.kpi_subtitles["estimated_cost_usd"].setText("参考：developers.openai.com/api/docs/pricing")
         labels["estimated_cost_usd"].setStyleSheet(f"color: {COLOR_TEXT_PRIMARY}; font-size: 45px; font-weight: 700;")
         self._set_kpi_state("estimated_cost_usd", "neutral")
 
@@ -1149,6 +1208,204 @@ class AnalyzerWindow(QMainWindow):
         frame.style().unpolish(frame)
         frame.style().polish(frame)
         frame.update()
+
+    def _build_main_splitter(self) -> QSplitter:
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+
+        self.thread_table = QTableWidget(0, len(THREAD_COLUMN_KEYS))
+        self.thread_table.setItemDelegate(NoFocusDelegate(self.thread_table))
+        self.thread_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.thread_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.thread_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.thread_table.setAlternatingRowColors(True)
+        self.thread_table.setSortingEnabled(True)
+        self.thread_table.horizontalHeader().setStretchLastSection(True)
+        self.thread_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Interactive)
+        self.thread_table.horizontalHeader().setSortIndicator(2, Qt.SortOrder.DescendingOrder)
+        self.thread_table.setColumnWidth(0, 160)
+        self.thread_table.setColumnWidth(1, 86)
+        self.thread_table.setColumnWidth(2, 220)
+        splitter.addWidget(self.thread_table)
+
+        details_panel = QFrame()
+        details_panel.setObjectName("detailsPanel")
+        details_layout = QVBoxLayout(details_panel)
+        details_layout.setContentsMargins(14, 14, 14, 14)
+        details_layout.setSpacing(10)
+
+        self.details_title_label = QLabel()
+        self.details_title_label.setProperty("role", "detailTitle")
+        details_layout.addWidget(self.details_title_label)
+
+        self.details_empty_label = QLabel()
+        self.details_empty_label.setProperty("role", "detailEmpty")
+        self.details_empty_label.setWordWrap(True)
+        details_layout.addWidget(self.details_empty_label)
+
+        self.details_scroll = QScrollArea()
+        self.details_scroll.setObjectName("detailsScroll")
+        self.details_scroll.setWidgetResizable(True)
+
+        details_content = QWidget()
+        self.details_grid = QGridLayout(details_content)
+        self.details_grid.setContentsMargins(0, 0, 0, 0)
+        self.details_grid.setHorizontalSpacing(12)
+        self.details_grid.setVerticalSpacing(8)
+        self.details_grid.setColumnStretch(1, 1)
+
+        self.detail_caption_labels = {}
+        self.detail_value_labels = {}
+        for row_index, key in enumerate(DETAIL_FIELD_KEYS):
+            caption = QLabel()
+            caption.setProperty("role", "detailKey")
+            caption.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+
+            value = QLabel("-")
+            value.setProperty("role", "detailValue")
+            value.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+            value.setWordWrap(True)
+            value.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+
+            self.details_grid.addWidget(caption, row_index, 0)
+            self.details_grid.addWidget(value, row_index, 1)
+            self.detail_caption_labels[key] = caption
+            self.detail_value_labels[key] = value
+
+        self.details_scroll.setWidget(details_content)
+        details_layout.addWidget(self.details_scroll, 1)
+        splitter.addWidget(details_panel)
+        splitter.setSizes([1000, 400])
+        return splitter
+
+    def apply_language(self) -> None:
+        text = self.current_text()
+        self.setWindowTitle(text["window_title"])
+        self.language_label.setText(text["language_label"])
+        self.days_label.setText(text["window_days_label"])
+        self.days_spin.setToolTip(text["days_tooltip"])
+        self.refresh_button.setText(text["refresh_button"])
+        self.pricing_label.setText(text["pricing_label"])
+        self.summary_group.setTitle(text["summary_group"])
+        self.summary_sections["core"].setText("Results")
+        self.summary_sections["tokens"].setText("Token Breakdown")
+        self.summary_sections["context"].setText("Runtime Context")
+        self.details_title_label.setText("Thread Details")
+        if self.language == "zh":
+            self.summary_sections["core"].setText("\u7ed3\u679c")
+            self.summary_sections["tokens"].setText("Token \u6784\u6210")
+            self.summary_sections["context"].setText("\u8fd0\u884c\u4e0a\u4e0b\u6587")
+            self.details_title_label.setText("\u7ebf\u7a0b\u8be6\u60c5")
+
+        for key, caption in self.kpi_labels.items():
+            if key == "primary_remaining_percent":
+                caption.setText("5 \u5c0f\u65f6\u989d\u5ea6" if self.language == "zh" else "5h Limit")
+            elif key == "secondary_remaining_percent":
+                caption.setText("\u5468\u989d\u5ea6" if self.language == "zh" else "Weekly Limit")
+            else:
+                caption.setText(text["summary_rows"].get(key, key))
+
+        for key, caption in self.detail_caption_labels.items():
+            caption.setText(text["details"].get(key, key))
+
+        self.details_empty_label.setText(text["no_active_threads"])
+        self.thread_table.setHorizontalHeaderLabels(text["thread_columns"])
+        self.statusBar().showMessage(text["status_ready"])
+
+        if self.current_report is not None:
+            self.populate_summary(self.current_report)
+            self.populate_threads(self.current_threads)
+            self.update_details()
+
+    def populate_threads(self, threads: list[dict]) -> None:
+        text = self.current_text()
+        self.thread_table.setSortingEnabled(False)
+        self.thread_table.clearContents()
+        self.thread_table.setRowCount(len(threads))
+
+        for row_index, thread in enumerate(threads):
+            self._set_text_item(row_index, 0, thread["title"] or text["not_found"])
+            self._set_text_item(row_index, 1, thread["model"] or text["not_found"])
+            self._set_text_item(row_index, 2, thread["last_activity"] or "-")
+            self._set_token_item(row_index, 3, thread["input_tokens"])
+            self._set_token_item(row_index, 4, thread["cached_input_tokens"])
+            self._set_token_item(row_index, 5, thread["output_tokens"])
+            self._set_token_item(row_index, 6, thread["reasoning_output_tokens"])
+            self._set_token_item(row_index, 7, thread["total_tokens"])
+            self._set_float_item(row_index, 8, thread["cache_hit_rate"])
+            self._set_cost_item(row_index, 9, thread["estimated_cost_usd"], text["cost_unavailable"])
+            self.thread_table.item(row_index, 0).setData(Qt.ItemDataRole.UserRole, thread)
+
+        self.thread_table.setSortingEnabled(True)
+        self.thread_table.sortItems(2, Qt.SortOrder.DescendingOrder)
+
+        if threads:
+            self.thread_table.selectRow(0)
+            self.details_empty_label.hide()
+            self.details_scroll.show()
+        else:
+            self.thread_table.clearSelection()
+            self._show_details_empty(text["no_active_threads"])
+
+    def update_details(self) -> None:
+        selected_rows = self.thread_table.selectionModel().selectedRows()
+        if not selected_rows:
+            self._show_details_empty(self.current_text()["no_active_threads"])
+            return
+
+        row_index = selected_rows[0].row()
+        item = self.thread_table.item(row_index, 0)
+        if item is None:
+            self._show_details_empty(self.current_text()["no_active_threads"])
+            return
+
+        thread = item.data(Qt.ItemDataRole.UserRole)
+        if not thread:
+            self._show_details_empty(self.current_text()["no_active_threads"])
+            return
+
+        self.details_empty_label.hide()
+        self.details_scroll.show()
+        not_found = self.current_text()["not_found"]
+
+        self._set_detail_value("title", thread["title"] or not_found)
+        self._set_detail_value("title_source", thread["title_source"] or "-")
+        self._set_detail_value("thread_id", thread["thread_id"] or "-")
+        self._set_detail_value("model", thread["model"] or not_found)
+        self._set_detail_value("last_activity", thread["last_activity"] or "-")
+        self._set_detail_value("latest_usage_ts", thread["latest_usage_ts"] or "-")
+        self._set_detail_value("message_round_count", str(thread.get("message_round_count", 0)))
+        self._set_detail_value(
+            "avg_tokens_per_round",
+            format_short_number(thread.get("avg_tokens_per_round", 0.0)),
+            tooltip=f"{thread.get('avg_tokens_per_round', 0.0):,.2f}",
+        )
+        self._set_detail_value("tool_call_count", str(thread.get("tool_call_count", 0)))
+        self._set_detail_value(
+            "output_ratio",
+            f"{thread.get('output_ratio', 0.0):.2f}%",
+            tooltip=f"{thread.get('output_ratio', 0.0):.4f}%",
+        )
+        self._set_detail_value("input_tokens", f"{thread['input_tokens']:,}")
+        self._set_detail_value("cached_input_tokens", f"{thread['cached_input_tokens']:,}")
+        self._set_detail_value("output_tokens", f"{thread['output_tokens']:,}")
+        self._set_detail_value("reasoning_output_tokens", f"{thread['reasoning_output_tokens']:,}")
+        self._set_detail_value("total_tokens", f"{thread['total_tokens']:,}")
+        self._set_detail_value("cache_hit_rate", f"{thread['cache_hit_rate']:.2f}%")
+        self._set_detail_value("estimated_cost_usd", self.format_cost(thread["estimated_cost_usd"]))
+        self._set_detail_value("file", thread["file"])
+
+    def _show_details_empty(self, message: str) -> None:
+        self.details_empty_label.setText(message)
+        self.details_empty_label.show()
+        self.details_scroll.hide()
+        for value_label in self.detail_value_labels.values():
+            value_label.setText("-")
+            value_label.setToolTip("")
+
+    def _set_detail_value(self, key: str, text: str, tooltip: str | None = None) -> None:
+        label = self.detail_value_labels[key]
+        label.setText(text)
+        label.setToolTip(tooltip or text)
 
 
 def run(
