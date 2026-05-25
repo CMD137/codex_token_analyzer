@@ -22,7 +22,7 @@ English | [中文](#codex-token-analyzer-1)
 
 ### Option 1: Download EXE (Recommended)
 
-Download the latest `CodexTokenAnalyzer.exe` from the [Releases](https://github.com/YOUR_USERNAME/codex_token_analyzer/releases) page. Double-click to run — no installation required.
+Download the latest `CodexTokenAnalyzer.exe` from the [Releases](https://github.com/CMD137/codex_token_analyzer/releases) page. Double-click to run — no installation required.
 
 > **Note:** The EXE reads session data from `~/.codex/`, so Codex CLI must be installed and have a history of sessions.
 
@@ -31,7 +31,7 @@ Download the latest `CodexTokenAnalyzer.exe` from the [Releases](https://github.
 Requirements: **Python 3.10+**
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/codex_token_analyzer.git
+git clone https://github.com/CMD137/codex_token_analyzer.git
 cd codex_token_analyzer
 pip install -r requirements.txt
 python codex_token_analyzer.py --gui
@@ -177,7 +177,7 @@ MIT
 
 ### 方式一：下载 EXE（推荐）
 
-从 [Releases](https://github.com/YOUR_USERNAME/codex_token_analyzer/releases) 页面下载最新的 `CodexTokenAnalyzer.exe`，双击运行即可。
+从 [Releases](https://github.com/CMD137/codex_token_analyzer/releases) 页面下载最新的 `CodexTokenAnalyzer.exe`，双击运行即可。
 
 > **注意：** EXE 会读取 `~/.codex/` 中的会话数据，需确保已安装 Codex CLI 并有使用记录。
 
@@ -186,7 +186,7 @@ MIT
 环境要求：**Python 3.10+**
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/codex_token_analyzer.git
+git clone https://github.com/CMD137/codex_token_analyzer.git
 cd codex_token_analyzer
 pip install -r requirements.txt
 python codex_token_analyzer.py --gui
