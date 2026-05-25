@@ -11,6 +11,7 @@ from pricing import estimate_cost, get_default_profile, get_profile_names, load_
 SESSIONS_BASE = Path.home() / ".codex" / "sessions"
 SESSION_INDEX = Path.home() / ".codex" / "session_index.jsonl"
 STATE_DB = Path.home() / ".codex" / "state_5.sqlite"
+LOGS_DB = Path.home() / ".codex" / "logs_2.sqlite"
 UTC = timezone.utc
 UTC_PLUS_8 = timezone(timedelta(hours=8))
 
@@ -118,6 +119,63 @@ def read_state_titles() -> dict[str, dict[str, Any]]:
     return titles
 
 
+def read_rate_limits_from_logs() -> dict[str, Any] | None:
+    """Read the latest codex.rate_limits WebSocket event from logs_2.sqlite.
+
+    The Codex server pushes rate limits via WebSocket; the client writes each
+    event to the local log database.  This function extracts the most recent
+    event and returns it in a normalised structure compatible with what
+    ``load_report`` expects.
+    """
+    if not LOGS_DB.exists():
+        return None
+
+    conn = sqlite3.connect(f"file:{LOGS_DB}?immutable=1", uri=True)
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """SELECT ts, feedback_log_body FROM logs
+               WHERE feedback_log_body LIKE '%"type":"codex.rate_limits"%'
+               ORDER BY ts DESC LIMIT 1"""
+        )
+        row = cur.fetchone()
+        if not row:
+            return None
+
+        ts, body = row
+        # The body is:  span_context{attrs} : more_spans : {json_payload}
+        # Find the JSON object by locating the last ": {" boundary.
+        idx = body.rfind(": {")
+        if idx == -1:
+            return None
+
+        json_str = body[idx + 2:]
+        data = json.loads(json_str)
+        rl = data.get("rate_limits") or {}
+        primary = rl.get("primary") or {}
+        secondary = rl.get("secondary") or {}
+
+        # Normalise into the same shape as the session-JSONL path so callers
+        # can consume the report uniformly.
+        return {
+            "source": "logs_2.sqlite",
+            "timestamp": datetime.fromtimestamp(ts, tz=timezone.utc),
+            "plan_type": data.get("plan_type", "unknown"),
+            "primary_used_percent": _safe_float(primary.get("used_percent")),
+            "primary_remaining_percent": max(0.0, 100.0 - _safe_float(primary.get("used_percent"))),
+            "primary_reset_at": _safe_float(primary.get("reset_at")),
+            "secondary_used_percent": _safe_float(secondary.get("used_percent")),
+            "secondary_remaining_percent": max(0.0, 100.0 - _safe_float(secondary.get("used_percent"))),
+            "secondary_reset_at": _safe_float(secondary.get("reset_at")),
+            "allowed": rl.get("allowed"),
+            "limit_reached": rl.get("limit_reached"),
+        }
+    except Exception:
+        return None
+    finally:
+        conn.close()
+
+
 def load_report(
     window_days: int = 7,
     display_timezone: timezone = UTC,
@@ -200,12 +258,25 @@ def load_report(
                 rate_limits = payload.get("rate_limits") or {}
                 if rate_limits and ts:
                     if latest_limits is None or ts > latest_limits["timestamp"]:
+                        primary = rate_limits.get("primary") or {}
+                        secondary = rate_limits.get("secondary") or {}
                         latest_limits = {
+                            "source": file_key,
                             "timestamp": ts,
-                            "timestamp_text": ts_text,
-                            "file": file_key,
-                            "rate_limits": rate_limits,
+                            "plan_type": rate_limits.get("plan_type", "unknown"),
+                            "primary_used_percent": _safe_float(primary.get("used_percent")),
+                            "primary_remaining_percent": max(0.0, 100.0 - _safe_float(primary.get("used_percent"))),
+                            "primary_reset_at": _safe_float(primary.get("resets_at")),
+                            "secondary_used_percent": _safe_float(secondary.get("used_percent")),
+                            "secondary_remaining_percent": max(0.0, 100.0 - _safe_float(secondary.get("used_percent"))),
+                            "secondary_reset_at": _safe_float(secondary.get("resets_at")),
                         }
+
+    # Prefer WebSocket-pushed rate limits from logs_2.sqlite (always more
+    # recent and includes reset timestamps).  Fall back to session-JSONL data.
+    logs_limits = read_rate_limits_from_logs()
+    if logs_limits:
+        latest_limits = logs_limits
 
     for thread in threads.values():
         thread_id = thread.get("thread_id")
@@ -284,20 +355,23 @@ def load_report(
 
     rate_limits_report = None
     if latest_limits:
-        rate_limits = latest_limits["rate_limits"]
-        primary = rate_limits.get("primary") or {}
-        secondary = rate_limits.get("secondary") or {}
-        primary_used = _safe_float(primary.get("used_percent"))
-        secondary_used = _safe_float(secondary.get("used_percent"))
+
+        def _format_reset_at(ts_float: float | None) -> str | None:
+            if not ts_float or ts_float <= 0:
+                return None
+            dt = datetime.fromtimestamp(ts_float, tz=timezone.utc)
+            return format_timestamp(dt, display_timezone)
 
         rate_limits_report = {
-            "file": latest_limits["file"],
+            "source": latest_limits.get("source", ""),
             "timestamp": format_timestamp(latest_limits["timestamp"], display_timezone),
-            "plan_type": rate_limits.get("plan_type", "unknown"),
-            "primary_used_percent": primary_used,
-            "primary_remaining_percent": max(0.0, 100.0 - primary_used),
-            "secondary_used_percent": secondary_used,
-            "secondary_remaining_percent": max(0.0, 100.0 - secondary_used),
+            "plan_type": latest_limits.get("plan_type", "unknown"),
+            "primary_used_percent": latest_limits["primary_used_percent"],
+            "primary_remaining_percent": latest_limits["primary_remaining_percent"],
+            "primary_reset_at": _format_reset_at(latest_limits.get("primary_reset_at")),
+            "secondary_used_percent": latest_limits["secondary_used_percent"],
+            "secondary_remaining_percent": latest_limits["secondary_remaining_percent"],
+            "secondary_reset_at": _format_reset_at(latest_limits.get("secondary_reset_at")),
         }
 
     return {

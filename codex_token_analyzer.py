@@ -41,12 +41,14 @@ LANGUAGE_CONFIG = {
         "cache_hit_rate": "缓存命中率",
         "cost_unavailable": "不可估算",
         "rate_limits_header": "额度",
-        "latest_limits_file": "最新额度文件",
+        "latest_limits_source": "额度来源",
         "limits_timestamp": "额度时间",
         "primary_used_percent": "5 小时已用",
         "primary_remaining_percent": "5 小时剩余",
+        "primary_reset_at": "5 小时重置于",
         "secondary_used_percent": "周额度已用",
         "secondary_remaining_percent": "周额度剩余",
+        "secondary_reset_at": "周额度重置于",
         "plan_type": "套餐",
         "no_rate_limits": "未找到额度信息。",
         "gui_dependency_missing": "缺少 GUI 依赖：PySide6",
@@ -92,12 +94,14 @@ LANGUAGE_CONFIG = {
         "cache_hit_rate": "cache hit rate",
         "cost_unavailable": "unavailable",
         "rate_limits_header": "RATE LIMITS",
-        "latest_limits_file": "latest limits file",
+        "latest_limits_source": "limits source",
         "limits_timestamp": "limits timestamp",
         "primary_used_percent": "5h used",
         "primary_remaining_percent": "5h remaining",
+        "primary_reset_at": "5h resets at",
         "secondary_used_percent": "weekly used",
         "secondary_remaining_percent": "weekly remaining",
+        "secondary_reset_at": "weekly resets at",
         "plan_type": "plan",
         "no_rate_limits": "No rate limits found.",
         "gui_dependency_missing": "GUI dependency missing: PySide6",
@@ -191,13 +195,17 @@ def print_report(
 
     print(f"\n{config['rate_limits_banner'].format(timezone=report['timezone_label'])}\n")
     if rate_limits:
-        print_metric(str(config["latest_limits_file"]), rate_limits["file"])
+        print_metric(str(config["latest_limits_source"]), rate_limits["source"])
         print_metric(str(config["limits_timestamp"]), rate_limits["timestamp"])
         print()
         print_metric(str(config["primary_used_percent"]), f"{rate_limits['primary_used_percent']:.1f}%")
         print_metric(str(config["primary_remaining_percent"]), f"{rate_limits['primary_remaining_percent']:.1f}%")
+        if rate_limits.get("primary_reset_at"):
+            print_metric(str(config["primary_reset_at"]), rate_limits["primary_reset_at"])
         print_metric(str(config["secondary_used_percent"]), f"{rate_limits['secondary_used_percent']:.1f}%")
         print_metric(str(config["secondary_remaining_percent"]), f"{rate_limits['secondary_remaining_percent']:.1f}%")
+        if rate_limits.get("secondary_reset_at"):
+            print_metric(str(config["secondary_reset_at"]), rate_limits["secondary_reset_at"])
         print_metric(str(config["plan_type"]), str(rate_limits["plan_type"]))
     else:
         print(config["no_rate_limits"])
